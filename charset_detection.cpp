@@ -71,6 +71,16 @@ static uint32_t convert_eucjp_to_unicode(uint32_t euc)
 	return 0;
 }
 
+static inline bool is_hiragana(uint32_t unicode)
+{
+	return unicode >= 0x3040 && unicode <= 0x309f;
+}
+
+static inline bool is_katakana(uint32_t unicode)
+{
+	return unicode >= 0x30a0 && unicode <= 0x30ff;
+}
+
 // 指定した Unicode コードポイントの「日本語らしさ」スコアを返す。
 // validation_jp.table に登録された文字対（ビグラム）キーに対して出現頻度を返す。
 // テーブルにないコードポイントは 0、ASCII（< 0x100）は常に 0。
@@ -89,6 +99,8 @@ static size_t jp_validation_count(uint32_t unicode)
 	case 0xff0e: // U+FF0E FULLWIDTH FULL STOP
 		return 1;
 	}
+	if (is_hiragana(unicode)) return 1;
+	if (is_katakana(unicode)) return 1;
 
 	size_t n = std::size(validation_jp_table);
 	size_t lo = 0;
@@ -172,6 +184,81 @@ std::u16string convert_eucjp_to_utf16(std::string_view const &s)
 		ptr = next;
 		uint32_t unicode = convert_eucjp_to_unicode(eucjp);
 		Push(unicode);
+	}
+	return out;
+}
+
+// Shift_JIS コードを JIS X 0208 コードに変換する。Shift_JIS のバイト構造を解析して対応する JIS コードを計算する。
+static inline uint16_t x_jmstojis(uint16_t c)
+{
+	if (c >= 0xe000) {
+		c -= 0x4000;
+	}
+	c = (((c >> 8) - 0x81) << 9) | (unsigned char)c;
+	if ((unsigned char)c >= 0x80) {
+		c -= 1;
+	}
+	if ((unsigned char)c >= 0x9e) {
+		c += 0x62;
+	} else {
+		c -= 0x40;
+	}
+	c += 0x2121;
+	return c;
+}
+
+// JIS X 0208 コードを Shift_JIS コードに変換する。JIS X 0208 のバイト構造を解析して対応する Shift_JIS コードを計算する。
+static inline uint16_t x_jistojms(uint16_t c)
+{
+	c -= 0x2121;
+	if (c & 0x100) {
+		c += 0x9e;
+	} else {
+		c += 0x40;
+	}
+	if ((unsigned char)c >= 0x7f) {
+		c++;
+	}
+	c = (((c >> (8 + 1)) + 0x81) << 8) | ((unsigned char)c);
+	if (c >= 0xa000) {
+		c += 0x4000;
+	}
+	return c;
+}
+
+// Shift_JISバイト列を UTF-16 文字列に変換する。
+// Shift_JIS のバイト構造を解析して、対応する JIS コードを経由して Unicode に変換する。
+// ASCII（0x00–0x7F）と半角カナ（0xA1–0xDF）は直接 Unicode にマッピングされる。
+// 対応する JIS コードがないバイト列は REPLACEMENT_CHARACTER に置き換えられる。
+std::u16string convert_sjis_to_utf16(std::string_view const &s)
+{
+	std::u16string out;
+	
+	char const *begin = s.data();
+	char const *end = begin + s.size();
+	char const *ptr = begin;
+	while (ptr < end) {
+		int c0 = (unsigned char)*ptr++;
+		if (c0 <= 0x7f) {
+			out.push_back(c0);
+			continue;
+		}
+		if (c0 >= 0xa1 && c0 <= 0xdf) {
+			out.push_back(0xff61 + (c0 - 0xa1));
+			continue;
+		}
+		if (ptr < end) {
+			int c1 = (unsigned char)*ptr++;
+			uint16_t sjis = (c0 << 8) | c1;
+			uint16_t jis = x_jmstojis(sjis);
+			if (jis != 0) {
+				uint32_t eucjp = x_jistoeuc(jis);
+				uint32_t unicode = convert_eucjp_to_unicode(eucjp);
+				out.push_back((char16_t)unicode);
+				continue;
+			}
+		}
+		out.push_back(REPLACEMENT_CHARACTER);
 	}
 	return out;
 }
@@ -301,14 +388,15 @@ std::string save_validation_jp_table(std::string_view utf8)
 //   3. 最高スコアの文字コードを採用する。全スコアが 0 の場合は空文字列を返す。
 std::string detect_charaset(std::string_view v)
 {
-	std::u16string iso2022jp_to_utf16 = convert_iso2022jp_to_utf16(v);
-	std::u16string eucjp_to_u16 = convert_eucjp_to_utf16(v);
-	std::u16string utf8_to_u16 = convert_utf8_to_utf16(v);
+	std::u16string u16_from_utf8 = convert_utf8_to_utf16(v);
+	std::u16string u16_from_eucjp = convert_eucjp_to_utf16(v);
+	std::u16string u16_from_sjis = convert_sjis_to_utf16(v);
+	std::u16string u16_from_iso2022jp = convert_iso2022jp_to_utf16(v);
 
 	// UTF-16 文字列の日本語らしさスコアを計算するラムダ。
 	// 非 ASCII 文字対（ビグラム）ごとに jp_validation_count を加算し、
 	// 対の総数で割った平均値を返す。
-	auto Validate = [](std::u16string utf16) -> float {
+	auto Validate = [](std::u16string const &utf16) -> float {
 		float score = 0;
 		size_t count = 0;
 
@@ -329,16 +417,17 @@ std::string detect_charaset(std::string_view v)
 	};
 
 	std::vector<std::pair<std::string, float>> scores;
-	scores.emplace_back("utf8", Validate(utf8_to_u16));
-	scores.emplace_back("eucjp", Validate(eucjp_to_u16));
-	scores.emplace_back("iso2022jp", Validate(iso2022jp_to_utf16));
+	scores.emplace_back("UTF-8", Validate(u16_from_utf8));
+	scores.emplace_back("EUC-JP", Validate(u16_from_eucjp));
+	scores.emplace_back("Shift_JIS", Validate(u16_from_sjis));
+	scores.emplace_back("ISO-2022-JP", Validate(u16_from_iso2022jp));
 	std::sort(scores.begin(), scores.end(), [](const auto &a, const auto &b) {
 		return a.second > b.second;
 	});
 	if (scores.front().second > 0) {
 		return scores.front().first;
 	}
-	return { };
+	return {};
 }
 
 // iconv を使って EUC-JP → Unicode 変換テーブルを生成し eucjp.table に書き出す。

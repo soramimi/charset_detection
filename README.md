@@ -7,6 +7,7 @@
 
 - **UTF-8**
 - **EUC-JP**
+- **Shift_JIS**
 - **ISO-2022-JP**
 - 上記いずれにも該当しない場合は **その他**（`unknown`）
 
@@ -16,12 +17,12 @@
 charset_detection [ファイル名]
 ```
 
-判別結果（`utf8` / `eucjp` / `iso2022jp` / `unknown`）を標準出力に1行で表示します。
-ファイル名を省略した場合は `input.utf8.txt` を対象とします。
+判別結果（`UTF-8` / `EUC-JP` / `Shift_JIS` / `ISO-2022-JP` / `unknown`）を標準出力に1行で表示します。
+ファイル名を省略した場合は `input.sjis.txt` を対象とします。
 
 ```sh
 > charset_detection input.eucjp.txt
-eucjp
+EUC-JP
 ```
 
 ## ビルド
@@ -47,7 +48,7 @@ cl /EHsc /std:c++17 /Fe:charset_detection.exe main.cpp charset_detection.cpp uni
 
 ### 判別の流れ
 
-1. 入力バイト列を UTF-8 / EUC-JP / ISO-2022-JP の 3 通りで UTF-16 に変換する。
+1. 入力バイト列を UTF-8 / EUC-JP / Shift_JIS / ISO-2022-JP の 4 通りで UTF-16 に変換する。
 2. 各変換結果に対してビグラム（連続する 2 文字対）スコアを計算する。
    - `validation_jp.table` に登録された文字対の出現頻度を合計し、文字対の総数で割った平均値をスコアとする。
    - 日本語として自然なテキストになるほどスコアが高くなる。
@@ -56,6 +57,12 @@ cl /EHsc /std:c++17 /Fe:charset_detection.exe main.cpp charset_detection.cpp uni
 ### 文字コード変換
 
 - **UTF-8** → UTF-16：[unicode_conversion.cpp](unicode_conversion.cpp) の `convert_utf8_to_utf16()` を使用。
+
+- **Shift_JIS** → UTF-16（`convert_sjis_to_utf16`）
+  以下のバイト構造を処理する：
+  - `0x00`–`0x7F`：ASCII
+  - `0xA1`–`0xDF`：半角カナ（JIS X 0201）
+  - `0x81`–`0x9F`, `0xE0`–`0xFC` + 1バイト：JIS X 0208（2バイト文字）
 
 - **EUC-JP** → UTF-16（`convert_eucjp_to_utf16`）
   以下のバイト構造を処理する：
@@ -90,4 +97,5 @@ cl /EHsc /std:c++17 /Fe:charset_detection.exe main.cpp charset_detection.cpp uni
 | [charset_detection.pro](charset_detection.pro) | qmake プロジェクトファイル |
 | `input.utf8.txt` | UTF-8 のテスト用データ |
 | `input.eucjp.txt` | EUC-JP のテスト用データ |
+| `input.sjis.txt` | Shift_JIS のテスト用データ |
 | `input.iso2022jp.txt` | ISO-2022-JP のテスト用データ |

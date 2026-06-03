@@ -20,7 +20,7 @@ int main(int argc, char **argv)
 		return 0;
 	}
 	// コマンドライン引数でファイル名を指定しなかった場合はデフォルトファイルを使用する
-	char const *input = (argc > 1) ? argv[1] : "input.utf8.txt";
+	char const *input = (argc > 1) ? argv[1] : "input.sjis.txt";
 	{
 		int fd = open(input, O_RDONLY | O_BINARY);
 		if (fd != -1) {
