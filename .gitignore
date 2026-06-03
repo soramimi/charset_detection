@@ -1,0 +1,4 @@
+.qtcreator/
+build/
+charaset_detection
+*.obj
