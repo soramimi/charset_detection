@@ -1,8 +1,9 @@
-#include <cstdio>
-#include <string>
-#include <vector>
 #include "../charset_detection.h"
 #include "../unicode_conversion.h"
+#include <cstdio>
+#include <optional>
+#include <string>
+#include <vector>
 
 int main(int argc, char **argv)
 {
@@ -20,7 +21,7 @@ int main(int argc, char **argv)
 		std::string_view arg = argv[argi++];
 		if (arg[0] == '-') {
 			if (arg == "-i") {
-				if (!opt.inputs.empty()) {
+				if (!opt.output.empty()) {
 					fprintf(stderr, "error: cannot use -o and -i together\n");
 					error = true;
 				}
@@ -62,20 +63,42 @@ int main(int argc, char **argv)
 	
 	if (error) return 1;
 	
-	auto Convert = [&](std::string_view v){
-		std::string s = detect_charaset(v);
-		if (s == "UTF-8") {
-			s = v;
-		} else if (s == "EUC-JP") {
-			s = convert_utf16_to_utf8(convert_eucjp_to_utf16(v));
-		} else if (s == "Shift_JIS") {
-			s = convert_utf16_to_utf8(convert_sjis_to_utf16(v));
-		} else if (s == "ISO-2022-JP") {
-			s = convert_utf16_to_utf8(convert_iso2022jp_to_utf16(v));
+	
+	std::string_view original;
+	std::vector<char> converted;
+	bool f_converted = false;
+	
+	auto Convert = [&](){
+		f_converted = false;
+		converted.clear();
+		
+		std::string charset = detect_charaset(original);
+		
+		std::optional<std::string> result;
+		if (charset == "UTF-8") {
+			// nop
+		} else if (charset == "EUC-JP") {
+			result = convert_utf16_to_utf8(convert_eucjp_to_utf16(original));
+		} else if (charset == "Shift_JIS") {
+			result = convert_utf16_to_utf8(convert_sjis_to_utf16(original));
+		} else if (charset == "ISO-2022-JP") {
+			result = convert_utf16_to_utf8(convert_iso2022jp_to_utf16(original));
 		} else {
-			s = v;
+			// nop
 		}
-		return s;
+		
+		f_converted = (bool)result;
+		if (f_converted && !result->empty()) {
+			converted = std::vector<char>(result->data(), result->data() + result->size());
+		}
+	};
+	
+	auto Save = [&](FILE *fp){
+		if (f_converted) {
+			fwrite(converted.data(), 1, converted.size(), fp);
+		} else {
+			fwrite(original.data(), 1, original.size(), fp);
+		}
 	};
 	
 	if (opt.inputs.empty()) {
@@ -86,9 +109,9 @@ int main(int argc, char **argv)
 			if (n <= 0) break;
 			input.insert(input.end(), buf, buf + n);
 		}
-		std::string_view v(input.data(), input.size());
-		std::string s = Convert(v);
-		fwrite(s.c_str(), 1, s.size(), stdout);
+		original = {input.data(), input.size()};
+		Convert();
+		Save(stdout);
 	} else {
 		for (std::string const &file : opt.inputs) {
 			FILE *fp = fopen(file.c_str(), "rb");
@@ -105,11 +128,12 @@ int main(int argc, char **argv)
 			}
 			fclose(fp);
 			
-			std::string_view v(input.data(), input.size());
-			std::string s = Convert(v);
+			original = {input.data(), input.size()};
+			Convert();
 			
 			char const *path = nullptr;
 			if (opt.overwrite) {
+				if (!f_converted) continue;
 				path = file.c_str();
 			} else if (!opt.output.empty()) {
 				path = opt.output.c_str();
@@ -120,10 +144,10 @@ int main(int argc, char **argv)
 					fprintf(stderr, "warning: failed to open file for writing: %s\n", file.c_str());
 					continue;
 				}
-				fwrite(s.c_str(), 1, s.size(), fp);
+				Save(fp);
 				fclose(fp);
 			} else {
-				fwrite(s.c_str(), 1, s.size(), stdout);
+				Save(stdout);
 			}
 		}
 	}

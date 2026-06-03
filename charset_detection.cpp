@@ -188,6 +188,11 @@ std::u16string convert_eucjp_to_utf16(std::string_view const &s)
 	return out;
 }
 
+static inline bool is_valid_sjis(uint16_t c)
+{
+	return (c >= 0x8140 && c <= 0x9ffc) || (c >= 0xe040 && c <= 0xebfc);
+}
+
 // Shift_JIS コードを JIS X 0208 コードに変換する。Shift_JIS のバイト構造を解析して対応する JIS コードを計算する。
 static inline uint16_t x_jmstojis(uint16_t c)
 {
@@ -239,23 +244,25 @@ std::u16string convert_sjis_to_utf16(std::string_view const &s)
 	char const *ptr = begin;
 	while (ptr < end) {
 		int c0 = (unsigned char)*ptr++;
-		if (c0 <= 0x7f) {
-			out.push_back(c0);
-			continue;
-		}
-		if (c0 >= 0xa1 && c0 <= 0xdf) {
-			out.push_back(0xff61 + (c0 - 0xa1));
-			continue;
-		}
-		if (ptr < end) {
-			int c1 = (unsigned char)*ptr++;
-			uint16_t sjis = (c0 << 8) | c1;
-			uint16_t jis = x_jmstojis(sjis);
-			if (jis != 0) {
-				uint32_t eucjp = x_jistoeuc(jis);
-				uint32_t unicode = convert_eucjp_to_unicode(eucjp);
-				out.push_back((char16_t)unicode);
+		if (c0 > 0) {
+			if (c0 <= 0x7f) {
+				out.push_back(c0);
 				continue;
+			}
+			if (c0 >= 0xa1 && c0 <= 0xdf) {
+				out.push_back(0xff61 + (c0 - 0xa1));
+				continue;
+			}
+			if (ptr < end) {
+				int c1 = (unsigned char)*ptr++;
+				uint16_t sjis = (c0 << 8) | c1;
+				if (is_valid_sjis(sjis)) {
+					uint16_t jis = x_jmstojis(sjis);
+					uint32_t eucjp = x_jistoeuc(jis);
+					uint32_t unicode = convert_eucjp_to_unicode(eucjp);
+					out.push_back((char16_t)unicode);
+					continue;
+				}
 			}
 		}
 		out.push_back(REPLACEMENT_CHARACTER);
@@ -396,31 +403,44 @@ std::string detect_charaset(std::string_view v)
 	// UTF-16 文字列の日本語らしさスコアを計算するラムダ。
 	// 非 ASCII 文字対（ビグラム）ごとに jp_validation_count を加算し、
 	// 対の総数で割った平均値を返す。
-	auto Validate = [](std::u16string const &utf16) -> float {
+	auto Validate = [](std::string const &name, std::u16string const &utf16) -> float {
+		constexpr char32_t REPLACEMENT_CHARACTER = 0xfffd;
+		
 		float score = 0;
 		size_t count = 0;
-
+		size_t negative = 0;
+		
 		Pair pair;
-		for (size_t i = 0; i < utf16.size(); i++) {
+		size_t total = utf16.size();
+		for (size_t i = 0; i < total; i++) {
+			uint16_t c = utf16[i];
+			if (c == REPLACEMENT_CHARACTER) {
+				negative++;
+			}
 			pair.leading = pair.trailing;
-			pair.trailing = utf16[i];
+			pair.trailing = c;
 			if (pair.leading >= 0x100 && pair.trailing >= 0x100) {
 				uint32_t key = (pair.leading << 16) | pair.trailing;
 				score += jp_validation_count(key);
 				count++;
 			}
 		}
+		score -= negative;
 		if (count > 0) {
 			score /= count;
+		}
+		if (0) {
+			fprintf(stderr, "%s: %f\n", name.c_str(), score);
 		}
 		return score;
 	};
 
 	std::vector<std::pair<std::string, float>> scores;
-	scores.emplace_back("UTF-8", Validate(u16_from_utf8));
-	scores.emplace_back("EUC-JP", Validate(u16_from_eucjp));
-	scores.emplace_back("Shift_JIS", Validate(u16_from_sjis));
-	scores.emplace_back("ISO-2022-JP", Validate(u16_from_iso2022jp));
+	scores.emplace_back("UTF-8", Validate("UTF-8", u16_from_utf8));
+	scores.emplace_back("EUC-JP", Validate("EUC-JP", u16_from_eucjp));
+	scores.emplace_back("Shift_JIS", Validate("Shift_JIS", u16_from_sjis));
+	scores.emplace_back("ISO-2022-JP", Validate("ISO-2022-JP", u16_from_iso2022jp));
+
 	std::sort(scores.begin(), scores.end(), [](const auto &a, const auto &b) {
 		return a.second > b.second;
 	});
