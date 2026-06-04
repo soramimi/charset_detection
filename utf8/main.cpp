@@ -11,6 +11,7 @@ int main(int argc, char **argv)
 		bool overwrite = false;
 		std::vector<std::string> inputs;
 		std::string output;
+		const bool convert_newline = true;
 	};
 	
 	Option opt;
@@ -62,13 +63,12 @@ int main(int argc, char **argv)
 	}	
 	
 	if (error) return 1;
-	
-	
+
 	std::string_view original;
 	std::vector<char> converted;
 	bool f_converted = false;
 	
-	auto Convert = [&](){
+	auto Process = [&](){
 		f_converted = false;
 		converted.clear();
 		
@@ -76,7 +76,7 @@ int main(int argc, char **argv)
 		
 		std::optional<std::string> result;
 		if (charset == "UTF-8") {
-			// nop
+			// pass
 		} else if (charset == "EUC-JP") {
 			result = convert_utf16_to_utf8(convert_eucjp_to_utf16(original));
 		} else if (charset == "Shift_JIS") {
@@ -84,7 +84,54 @@ int main(int argc, char **argv)
 		} else if (charset == "ISO-2022-JP") {
 			result = convert_utf16_to_utf8(convert_iso2022jp_to_utf16(original));
 		} else {
-			// nop
+			return; // unknown charset, do nothing
+		}
+		
+		if (opt.convert_newline) {
+			std::vector<std::string_view> lines;
+			char const *begin;
+			char const *end;
+			if (result) {
+				begin = result->data();
+				end = result->data() + result->size();
+			} else {
+				begin = original.data();
+				end = original.data() + original.size();
+			}
+			char const *left = begin;
+			char const *right = begin;
+			while (1) {
+				int c = -1;
+				if (right < end) {
+					c = (unsigned char)*right++;
+				}
+				if (c == '\n' || c == '\r' || c == -1) {
+					lines.emplace_back(left, right - left);
+					if (c == '\r' && right + 1 < end && right[1] == '\n') {
+						right++;
+					}
+					if (c == -1) break;
+					right++;
+					left = right;
+				}
+			}
+			std::string newstr;
+			for (std::string_view line : lines) {
+				bool lf = false;
+				if (!line.empty() && line.back() == '\n') {
+					line.remove_suffix(1);
+					lf = true;
+				}
+				if (!line.empty() && line.back() == '\r') {
+					line.remove_suffix(1);
+					lf = true;
+				}
+				newstr += line;
+				if (lf) {
+					newstr += '\n';
+				}
+			}
+			result = newstr;
 		}
 		
 		f_converted = (bool)result;
@@ -110,7 +157,7 @@ int main(int argc, char **argv)
 			input.insert(input.end(), buf, buf + n);
 		}
 		original = {input.data(), input.size()};
-		Convert();
+		Process();
 		Save(stdout);
 	} else {
 		for (std::string const &file : opt.inputs) {
@@ -129,7 +176,7 @@ int main(int argc, char **argv)
 			fclose(fp);
 			
 			original = {input.data(), input.size()};
-			Convert();
+			Process();
 			
 			char const *path = nullptr;
 			if (opt.overwrite) {
