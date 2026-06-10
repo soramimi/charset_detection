@@ -5,6 +5,8 @@ CONFIG += console c++17
 CONFIG -= app_bundle
 CONFIG -= qt
 
+DEFINES += NOMINMAX
+
 SOURCES += \
         ../charset_detection.cpp \
         ../unicode_conversion.cpp \

@@ -3,13 +3,16 @@
 #include <cstdint>
 #include <cstring>
 #include <fcntl.h>
-#include <iconv.h>
 #include <map>
 #include <string>
 #include <string_view>
 #include <sys/stat.h>
 #include <vector>
+#include <limits>
 
+#ifndef _WIN32
+#include <iconv.h>
+#endif
 
 #include "eucjp.table"
 #include "validation_jp.table"
@@ -345,7 +348,7 @@ std::u16string convert_iso2022jp_to_utf16(std::string_view s)
 // 非 ASCII 文字（>= 0x100）の連続する 2 文字対の出現回数を集計し、
 // 上位 4096 エントリを validation_jp.table ファイルに書き出す。
 // このテーブルは detect_charaset のスコアリングに使用される。
-std::string save_validation_jp_table(std::string_view utf8)
+void save_validation_jp_table(std::string_view utf8)
 {
 	std::u16string s = convert_utf8_to_utf16(utf8);
 
@@ -368,7 +371,7 @@ std::string save_validation_jp_table(std::string_view utf8)
 	for (const auto &entry : counts) {
 		vec.push_back(entry);
 	}
-	vec.resize(std::min(4096UL, vec.size()));
+	vec.resize(std::min((size_t)4096, vec.size()));
 	FILE *fp = fopen("validation_jp.table", "w");
 	if (fp) {
 		fputs(R"---(struct {
@@ -455,6 +458,7 @@ std::string detect_charaset(std::string_view v)
 // SS3 プレフィックス付き 3バイト（0x8F0000–）の全コードを列挙して変換する。
 // 生成したテーブルは convert_eucjp_to_unicode で使用される。
 // このツール自体のビルド時には呼び出されず、テーブル再生成時のみ使用する。
+#ifndef _WIN32
 static void save_eucjp_table()
 {
 	std::map<uint32_t, uint32_t> eucjp_to_unicode_map;
@@ -546,3 +550,5 @@ static void save_eucjp_table()
 		}
 	}
 }
+#endif
+
